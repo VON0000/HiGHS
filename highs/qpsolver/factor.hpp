@@ -34,6 +34,8 @@ class CholeskyFactor {
   std::vector<double> a;
 
   void resize(HighsInt new_k_max) {
+    // Keep a positive storage dimension so that expand() can grow from zero.
+    new_k_max = max(HighsInt(1), new_k_max);
     std::vector<double> L_old = L;
     L.clear();
     L.resize((new_k_max) * (new_k_max));

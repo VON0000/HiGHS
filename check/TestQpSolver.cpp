@@ -5,6 +5,8 @@
 #include "Highs.h"
 #include "catch.hpp"
 #include "io/FilereaderLp.h"
+#include "qpsolver/basis.hpp"
+#include "qpsolver/factor.hpp"
 
 const bool dev_run = false;
 const double inf = kHighsInf;
@@ -55,6 +57,45 @@ void testPrimalDualObjective(Highs& h,
   double optimality_tolerance;
   h.getOptionValue("optimality_tolerance", optimality_tolerance);
   REQUIRE(fabs(info.primal_dual_objective_error) < optimality_tolerance);
+}
+
+TEST_CASE("qp-cholesky-expand-from-zero", "[qpsolver]") {
+  Instance instance(2, 0);
+  instance.A.mat.start = {0, 0, 0};
+  instance.Q.mat.start = {0, 2, 4};
+  instance.Q.mat.index = {0, 1, 0, 1};
+  instance.Q.mat.value = {4, 2, 2, 5};
+  Statistics statistics;
+  Runtime runtime(instance, statistics);
+  Basis basis(runtime, {}, {}, {0, 1});
+  CholeskyFactor factor(runtime, basis);
+
+  // Recompute with both bounds active, then release them one at a time.
+  for (HighsInt i = 0; i < instance.num_var; i++) {
+    REQUIRE(basis.activate(runtime.settings, i, BasisStatus::kActiveAtLower, i,
+                           nullptr) == QpSolverStatus::OK);
+  }
+  REQUIRE(factor.recompute() == QpSolverStatus::OK);
+  for (HighsInt i = 0; i < instance.num_var; i++) {
+    QpVector yp = QpVector::unit(instance.num_var, i);
+    QpVector gyp = runtime.instance.Q.mat_vec(yp);
+    QpVector m(i);
+    basis.Ztprod(gyp, m);
+    QpVector l = m;
+    REQUIRE(factor.solveL(l) == QpSolverStatus::OK);
+    basis.deactivate(i);
+    REQUIRE(factor.expand(yp, gyp, l, m) == QpSolverStatus::OK);
+  }
+
+  // The expanded factor must solve [4 2; 2 5] * x = [8; 12].
+  QpVector rhs(2);
+  rhs.value = {8, 12};
+  rhs.resparsify();
+  REQUIRE(factor.solve(rhs) == QpSolverStatus::OK);
+  for (HighsInt i = 0; i < rhs.dim; i++) {
+    REQUIRE(std::isfinite(rhs.value[i]));
+    REQUIRE(fabs(rhs.value[i] - (i + 1)) < 1e-12);
+  }
 }
 
 TEST_CASE("qp-unbounded", "[qpsolver]") {
